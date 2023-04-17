@@ -260,7 +260,7 @@ def main():
     FI_setup.close_golden_results()
 
 
-    writer = SummaryWriter(os.path.join(args.checkpoint, 'logs'))
+    writer = SummaryWriter(os.path.join(full_log_path, 'logs'))
     # 3. Prepare the Model for fault injections
     FI_setup.FI_framework.create_fault_injection_model(torch.device('cuda'),model,
                                         batch_size=1,
