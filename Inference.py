@@ -17,6 +17,7 @@ import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.optim
+import torch.profiler
 import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.transforms as transforms
@@ -155,8 +156,6 @@ def main():
     args = parser.parse_args()
     with open(args.config) as f:
         config = yaml.full_load(f)
-    layer_num=config['fault_info']['weights']['layer'][0]
-    setup_log_file(os.path.expanduser(f"log/log_layer_{layer_num}.log"))
 
     if args.seed is not None:
         random.seed(args.seed)
@@ -241,54 +240,8 @@ def main():
     val_loader_len = ceil(len(val_dataset)/args.batch_size)
 
 
+    train_loss, train_acc = validate(val_loader, val_loader_len, model, criterion)
 
-    name_config=((args.config.split('/'))[-1]).replace(".yaml","")
-    conf_fault_dict=config['fault_info']['weights']
-    name_config=f"FSIM_logs/{name_config}_weights_{conf_fault_dict['layer'][0]}"
-
-    cwd=os.getcwd() 
-    model.eval() 
-    print(model)
-    # student_model.deactivate_analysis()
-    full_log_path=os.path.join(cwd,name_config)
-    # 1. create the fault injection setup
-    FI_setup=FI_manager(full_log_path,"ckpt_FI.json","fsim_report.csv")
-
-    # 2. Run a fault free scenario to generate the golden model
-    FI_setup.open_golden_results("Golden_results")
-    train_loss, train_acc = validate(val_loader, val_loader_len, model, criterion, fsim_enabled=True, Fsim_setup=FI_setup)
-    FI_setup.close_golden_results()
-
-
-    writer = SummaryWriter(os.path.join(full_log_path, 'logs'))
-    # 3. Prepare the Model for fault injections
-    FI_setup.FI_framework.create_fault_injection_model(torch.device('cuda'),model,
-                                        batch_size=1,
-                                        input_shape=[3,96,96],
-                                        layer_types=[torch.nn.Conv2d,torch.nn.Linear])
-    
-    # 4. generate the fault list
-    logging.getLogger('pytorchfi').disabled = True
-    FI_setup.generate_fault_list(flist_mode='sbfm',f_list_file='fault_list.csv',layer=conf_fault_dict['layer'][0])    
-    FI_setup.load_check_point()
-    
-    # 5. Execute the fault injection campaign
-    for fault,k in FI_setup.iter_fault_list():
-        # 5.1 inject the fault in the model
-        FI_setup.FI_framework.bit_flip_weight_inj(fault)
-        FI_setup.open_faulty_results(f"F_{k}_results")
-        try:   
-            # 5.2 run the inference with the faulty model 
-            val_loss, prec1 = validate(val_loader, val_loader_len, FI_setup.FI_framework.faulty_model, criterion, fsim_enabled=True, Fsim_setup=FI_setup)
-            writer.add_scalars('loss', {'train loss': train_loss, 'validation loss': val_loss}, k)
-            writer.add_scalars('accuracy', {'train accuracy': train_acc, 'validation accuracy': prec1}, k)
-        except Exception as Error:
-            msg=f"Exception error: {Error}"
-            logger.info(msg)
-        # 5.3 Report the results of the fault injection campaign
-        FI_setup.parse_results()
-    FI_setup.terminate_fsim()
-    writer.close()
     ########################################################################################
 
     # if args.evaluate:
@@ -315,43 +268,53 @@ def validate(val_loader, val_loader_len, model, criterion, fsim_enabled=False, F
     model.eval()
 
     end = time.time()
-    for i, (input, target) in enumerate(val_loader):
-        # measure data loading time
-        data_time.update(time.time() - end)
+    with torch.profiler.profile(
+        schedule=torch.profiler.schedule(
+        wait=1,
+        warmup=1,
+        active=3,
+        repeat=2),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/mobilenet'),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True
+        ) as profiler:
+        for i, (input, target) in enumerate(val_loader):
+            # measure data loading time
+            data_time.update(time.time() - end)
 
-        target = target.cuda(non_blocking=True)
-        #logger.info(f"Input={input.shape}")
-        with torch.no_grad():
-            # compute output            
-            output = model(input)
-            loss = criterion(output, target)
-            if fsim_enabled==True:
-                Fsim_setup.FI_report.update_report(i,output,target,topk=(1,5))
+            target = target.cuda(non_blocking=True)
+            #logger.info(f"Input={input.shape}")
+            with torch.no_grad():
+                # compute output            
+                output = model(input)
+                loss = criterion(output, target)
 
-        # measure accuracy and record loss
-        prec1, prec5 = accuracy(output, target, topk=(1, 5))
-        losses.update(loss.item(), input.size(0))
-        top1.update(prec1.item(), input.size(0))
-        top5.update(prec5.item(), input.size(0))
+            # measure accuracy and record loss
+            prec1, prec5 = accuracy(output, target, topk=(1, 5))
+            losses.update(loss.item(), input.size(0))
+            top1.update(prec1.item(), input.size(0))
+            top5.update(prec5.item(), input.size(0))
 
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
 
-        # plot progress
-        bar.suffix = '({batch}/{size}) Data: {data:.3f}s | Batch: {bt:.3f}s | Total: {total:} | ETA: {eta:} | Loss: {loss:.4f} | top1: {top1: .3f} | top5: {top5: .3f}'.format(
-            batch=i + 1,
-            size=val_loader_len,
-            data=data_time.avg,
-            bt=batch_time.avg,
-            total=bar.elapsed_td,
-            eta=bar.eta_td,
-            loss=losses.avg,
-            top1=top1.avg,
-            top5=top5.avg,
-        )
-        bar.next()
-    bar.finish()
+            # plot progress
+            bar.suffix = '({batch}/{size}) Data: {data:.3f}s | Batch: {bt:.3f}s | Total: {total:} | ETA: {eta:} | Loss: {loss:.4f} | top1: {top1: .3f} | top5: {top5: .3f}'.format(
+                batch=i + 1,
+                size=val_loader_len,
+                data=data_time.avg,
+                bt=batch_time.avg,
+                total=bar.elapsed_td,
+                eta=bar.eta_td,
+                loss=losses.avg,
+                top1=top1.avg,
+                top5=top5.avg,
+            )
+            bar.next()
+            profiler.step()
+        bar.finish()
     return (losses.avg, top1.avg)
 
 

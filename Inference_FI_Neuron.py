@@ -153,9 +153,11 @@ def get_transforms(split='train', input_size=(128, 128)):
 def main():
     global args, best_prec1
     args = parser.parse_args()
+    print(args.config)
     with open(args.config) as f:
         config = yaml.full_load(f)
-    layer_num=config['fault_info']['weights']['layer'][0]
+    layer_num=config['fault_info']['neurons']['layers'][0]
+    print(layer_num)
     setup_log_file(os.path.expanduser(f"log/log_layer_{layer_num}.log"))
 
     if args.seed is not None:
@@ -243,8 +245,8 @@ def main():
 
 
     name_config=((args.config.split('/'))[-1]).replace(".yaml","")
-    conf_fault_dict=config['fault_info']['weights']
-    name_config=f"FSIM_logs/{name_config}_weights_{conf_fault_dict['layer'][0]}"
+    conf_fault_dict=config['fault_info']['neurons']
+    name_config=f"FSIM_logs/{name_config}_neurons_{conf_fault_dict['layers'][0]}"
 
     cwd=os.getcwd() 
     model.eval() 
@@ -265,17 +267,26 @@ def main():
     FI_setup.FI_framework.create_fault_injection_model(torch.device('cuda'),model,
                                         batch_size=1,
                                         input_shape=[3,96,96],
-                                        layer_types=[torch.nn.Conv2d,torch.nn.Linear])
+                                        layer_types=[torch.nn.Conv2d,torch.nn.Linear],Neurons=True)
     
     # 4. generate the fault list
     logging.getLogger('pytorchfi').disabled = True
-    FI_setup.generate_fault_list(flist_mode='sbfm',f_list_file='fault_list.csv',layer=conf_fault_dict['layer'][0])    
+    FI_setup.generate_fault_list(flist_mode='neurons',
+                                 f_list_file='fault_list.csv',
+                                 layers=conf_fault_dict['layers'],
+                                 trials=conf_fault_dict['trials'], 
+                                 size_tail_y=conf_fault_dict['size_tail_y'], 
+                                 size_tail_x=conf_fault_dict['size_tail_x'],
+                                 block_fault_rate_delta=conf_fault_dict['block_fault_rate_delta'],
+                                 block_fault_rate_steps=conf_fault_dict['block_fault_rate_steps'],
+                                 neuron_fault_rate_delta=conf_fault_dict['neuron_fault_rate_delta'],
+                                 neuron_fault_rate_steps=conf_fault_dict['neuron_fault_rate_steps'])   
     FI_setup.load_check_point()
     
     # 5. Execute the fault injection campaign
     for fault,k in FI_setup.iter_fault_list():
         # 5.1 inject the fault in the model
-        FI_setup.FI_framework.bit_flip_weight_inj(fault)
+        FI_setup.FI_framework.bit_flip_err_neuron(fault)
         FI_setup.open_faulty_results(f"F_{k}_results")
         try:   
             # 5.2 run the inference with the faulty model 
