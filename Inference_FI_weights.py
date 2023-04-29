@@ -105,6 +105,11 @@ parser.add_argument('-c', '--checkpoint', default='checkpoints', type=str, metav
 parser.add_argument('--weight', default='', type=str, metavar='WEIGHT',
                     help='path to pretrained weight (default: none)')
 
+parser.add_argument('--split', default=True, type=bool, metavar='SPLIT',
+                    help='select split model')
+
+parser.add_argument('--fsim_config', required=True, help='yaml file path')
+
 best_prec1 = 0
 
 
@@ -155,8 +160,13 @@ def main():
     args = parser.parse_args()
     with open(args.config) as f:
         config = yaml.full_load(f)
-    layer_num=config['fault_info']['weights']['layer'][0]
-    setup_log_file(os.path.expanduser(f"log/log_layer_{layer_num}.log"))
+
+    with open(args.fsim_config) as fsc:
+        fsim_config=yaml.full_load(fsc)
+
+    fsim_log_dir=fsim_config['fault_info']['log_dir']
+
+    setup_log_file(os.path.expanduser(f"{fsim_log_dir}/fsim_log.log"))
 
     if args.seed is not None:
         random.seed(args.seed)
@@ -178,7 +188,10 @@ def main():
     print(config)
     split_position = config.get('split_position', -1)
     bottleneck_channels = config.get('bottleneck_channels', -1)
-    model = mobilenetv3.SplitMobileNetV3(num_classes=10, pretrained=args.pretrained, split_position=split_position, bottleneck_channels=bottleneck_channels)
+    if args.split:
+        model = mobilenetv3.SplitMobileNetV3(num_classes=10, pretrained=args.pretrained, split_position=split_position, bottleneck_channels=bottleneck_channels)
+    else:
+        model = mobilenetv3.SplitMobileNetV3(num_classes=10, pretrained=args.pretrained)
 
     if not args.distributed:
         model = torch.nn.DataParallel(model).cuda()
@@ -226,31 +239,22 @@ def main():
     # The flag below controls whether to allow TF32 on cuDNN. This flag defaults to True.
     cudnn.allow_tf32 = True
 
-    train_dataset = datasets.STL10(root=f"{args.data}/stl10", transform=get_transforms(split='train'),
-                                   download=True, split="train")
     val_dataset = datasets.STL10(root=f"{args.data}/stl10", transform=get_transforms(split='test'),
                                  download=True, split="test")
 
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size,
-                                               shuffle=True, num_workers=args.workers)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size,
                                              shuffle=False, num_workers=args.workers)
 
-    train_loader_len = ceil(len(train_dataset)/args.batch_size)
     val_loader_len = ceil(len(val_dataset)/args.batch_size)
 
-
-
-    name_config=((args.config.split('/'))[-1]).replace(".yaml","")
-    conf_fault_dict=config['fault_info']['weights']
-    name_config=f"FSIM_logs/{name_config}_weights_{conf_fault_dict['layer'][0]}"
+    conf_fault_dict=fsim_config['fault_info']['neurons']
 
     cwd=os.getcwd() 
     model.eval() 
     print(model)
     # student_model.deactivate_analysis()
-    full_log_path=os.path.join(cwd,name_config)
+    full_log_path=os.path.join(cwd,fsim_log_dir)
     # 1. create the fault injection setup
     FI_setup=FI_manager(full_log_path,"ckpt_FI.json","fsim_report.csv")
 

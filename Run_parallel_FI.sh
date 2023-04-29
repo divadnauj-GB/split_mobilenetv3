@@ -1,7 +1,12 @@
 #!/bin/bash
 
-START=14
-END=15
+START=$1
+END=$2
+
+GPUID=$3
+
+
+source ~/miniconda3/bin/activate sc2-benchmark
 
 # Trap SIGINT signal (Ctrl+C)
 trap 'terminate_script' INT
@@ -18,7 +23,7 @@ terminate_script() {
 
 child_pids=()
 for (( i=${START}; i<=${END}; i++ )); do
-   bash ./Run_inference_FI.sh 5 ${i} 0 W &
+   bash ./Run_inference_FI.sh 5 ${i} ${GPUID} W &
    child_pids+=($!)
 done
 

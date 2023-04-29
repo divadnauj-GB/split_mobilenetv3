@@ -1,6 +1,6 @@
 #!/bin/bash
 
-START=1
+START=14
 END=15
 
 source ~/miniconda3/bin/activate sc2-benchmark

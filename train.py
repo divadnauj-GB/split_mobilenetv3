@@ -232,7 +232,7 @@ def main():
             'state_dict': model.state_dict(),
             'best_prec1': best_prec1,
             'optimizer': optimizer.state_dict(),
-        }, is_best, checkpoint=args.checkpoint)
+        }, is_best, checkpoint=args.checkpoint,best_file_name=f"split{split_position}_ch{bottleneck_channels}.pth.tar")
 
     logger.close()
     logger.plot()
@@ -352,11 +352,11 @@ def validate(val_loader, val_loader_len, model, criterion):
     return (losses.avg, top1.avg)
 
 
-def save_checkpoint(state, is_best, checkpoint='checkpoint', filename='checkpoint.pth.tar'):
+def save_checkpoint(state, is_best, checkpoint='checkpoint', filename='checkpoint.pth.tar', best_file_name='model_best.pth.tar'):
     filepath = os.path.join(checkpoint, filename)
     torch.save(state, filepath)
     if is_best:
-        shutil.copyfile(filepath, os.path.join(checkpoint, 'model_best.pth.tar'))
+        shutil.copyfile(filepath, os.path.join(checkpoint, best_file_name))
 
 
 from math import cos, pi, ceil
