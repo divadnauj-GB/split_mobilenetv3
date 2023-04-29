@@ -12,6 +12,9 @@ terminate_script() {
 
 trap 'terminate_script' INT
 
+conda deactivate
+source ~/miniconda3/bin/activate sc2-benchmark
+
 PWD=`pwd`
 echo ${PWD}
 global_PWD="$PWD"

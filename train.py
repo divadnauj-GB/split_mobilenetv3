@@ -232,7 +232,7 @@ def main():
             'state_dict': model.state_dict(),
             'best_prec1': best_prec1,
             'optimizer': optimizer.state_dict(),
-        }, is_best, checkpoint=args.checkpoint,best_file_name=f"split{split_position}_ch{bottleneck_channels}.pth.tar")
+        }, is_best, checkpoint=args.checkpoint,filename=f"chkpt{split_position}_{bottleneck_channels}.pth.tar", best_file_name=f"split{split_position}_ch{bottleneck_channels}.pth.tar")
 
     logger.close()
     logger.plot()

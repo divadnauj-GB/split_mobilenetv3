@@ -135,7 +135,7 @@ def setup_log_file(log_file_path):
     fh.setFormatter(Formatter(LOGGING_FORMAT))
     def_logger.addHandler(fh)
 
-def get_transforms(split='train', input_size=(128, 128)):
+def get_transforms(split='train', input_size=(96, 96)):
 
     if split == 'train':
         transform = transforms.Compose([
