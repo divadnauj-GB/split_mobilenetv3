@@ -37,7 +37,8 @@ from pytorchfi.FI_Weights import FI_report_classifier
 from pytorchfi.FI_Weights import FI_framework
 from pytorchfi.FI_Weights import FI_manager 
 from pytorchfi.FI_Weights import DatasetSampling 
-
+import numpy as np
+import h5py
 # comment this line, otherwise the fault injections will collapse due to leaking memory produced by 'file_system
 #torch.multiprocessing.set_sharing_strategy('file_system')
 import logging
@@ -261,8 +262,24 @@ def main():
 
     # 2. Run a fault free scenario to generate the golden model
     FI_setup.open_golden_results("Golden_results")
-    train_loss, train_acc = validate(val_loader, val_loader_len, model, criterion, fsim_enabled=True, Fsim_setup=FI_setup)
+    train_loss, train_acc, embedding_list, target_list, pred_list = validate(val_loader, val_loader_len, model, criterion, fsim_enabled=True, Fsim_setup=FI_setup)
     FI_setup.close_golden_results()
+
+    embeddings = torch.cat(embedding_list).cpu().numpy()
+    targets = torch.cat(target_list).cpu().numpy()
+    preds = torch.cat(pred_list).cpu().numpy()
+
+    dest_file = os.path.join(full_log_path, "Golden_embeddings.h5")
+    with h5py.File(dest_file, "w") as hf:
+        hf.create_dataset("data", data=embeddings, compression="gzip")
+        hf.create_dataset("class_id", data=targets, compression="gzip")
+        hf.create_dataset("predicted", data=preds, compression="gzip")
+        hf.create_dataset("sample_id", data=range(len(val_loader)), compression="gzip")
+
+
+    print("############################################################################################################")
+    print("############################################################################################################")
+    print("############################################################################################################")
 
 
     writer = SummaryWriter(os.path.expanduser('logs'))
@@ -274,7 +291,7 @@ def main():
     
     # 4. generate the fault list
     logging.getLogger('pytorchfi').disabled = True
-    FI_setup.generate_fault_list(flist_mode='sbfm',f_list_file='fault_list.csv',layer=conf_fault_dict['layer'][0])    
+    FI_setup.generate_fault_list(flist_mode='sbfm',f_list_file='fault_list.csv',layer=conf_fault_dict['layer'][0],num_faults=1)    
     FI_setup.load_check_point()
     
     # 5. Execute the fault injection campaign
@@ -284,7 +301,18 @@ def main():
         FI_setup.open_faulty_results(f"F_{k}_results")
         try:   
             # 5.2 run the inference with the faulty model 
-            val_loss, prec1 = validate(val_loader, val_loader_len, FI_setup.FI_framework.faulty_model, criterion, fsim_enabled=True, Fsim_setup=FI_setup)
+            val_loss, prec1, embedding_list, target_list, pred_list = validate(val_loader, val_loader_len, FI_setup.FI_framework.faulty_model, criterion, fsim_enabled=True, Fsim_setup=FI_setup)
+            embeddings = torch.cat(embedding_list).cpu().numpy()
+            targets = torch.cat(target_list).cpu().numpy()
+            preds = torch.cat(pred_list).cpu().numpy()
+
+            dest_file = os.path.join(full_log_path, f"F_{k}_results_embeddings.h5")
+            with h5py.File(dest_file, "w") as hf:
+                hf.create_dataset("data", data=embeddings, compression="gzip")
+                hf.create_dataset("class_id", data=targets, compression="gzip")
+                hf.create_dataset("predicted", data=preds, compression="gzip")
+                hf.create_dataset("sample_id", data=range(len(val_loader)), compression="gzip")
+
             writer.add_scalars('loss', {'train loss': train_loss, 'validation loss': val_loss}, k)
             writer.add_scalars('accuracy', {'train accuracy': train_acc, 'validation accuracy': prec1}, k)
         except Exception as Error:
@@ -316,24 +344,55 @@ def validate(val_loader, val_loader_len, model, criterion, fsim_enabled=False, F
     top1 = AverageMeter()
     top5 = AverageMeter()
 
+    first_layers=nn.Sequential(*list(model.module.features.children())[0])
+    compressor=(list(model.module.features.children())[1].compressor)
+    head_layers_sp=[first_layers,compressor]
+    model_partial = nn.Sequential(*list(head_layers_sp))
+
     # switch to evaluate mode
     model.eval()
+    model_partial.eval()
+
 
     end = time.time()
+    embedding_list = []
+    pred_list = []
+    target_list = []
+    input_list = []
+    log_freq = 50
+    steps = len(val_loader)/log_freq
+    bar = Bar('EMBEDDINGS', max=steps)
+
+
     for i, (input, target) in enumerate(val_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
         target = target.cuda(non_blocking=True)
+        input = input.cuda()
         #logger.info(f"Input={input.shape}")
         with torch.no_grad():
-            # compute output            
+            # compute output  
+            # embedding = model_partial(torch.unsqueeze(input, dim=0)) 
+            # outpute = model(torch.unsqueeze(input, dim=0)) 
+            embedding = model_partial(input) 
+            outpute = model(input)      
+            _, pred = outpute.topk(1, 1, True, True)   
             output = model(input)
             loss = criterion(output, target)
             if fsim_enabled==True:
                 Fsim_setup.FI_report.update_report(i,output,target,topk=(1,5))
 
-        # measure accuracy and record loss
+        target_list.append(target.cpu().detach())
+        embedding_list.append(embedding)
+        pred_list.append(pred[0])
+
+        # embedding_dict = {"embedding":em}
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+         # measure accuracy and record loss
         prec1, prec5 = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), input.size(0))
         top1.update(prec1.item(), input.size(0))
@@ -357,7 +416,7 @@ def validate(val_loader, val_loader_len, model, criterion, fsim_enabled=False, F
         )
         bar.next()
     bar.finish()
-    return (losses.avg, top1.avg)
+    return (losses.avg, top1.avg, embedding_list, target_list, pred_list)
 
 
 def save_checkpoint(state, is_best, checkpoint='checkpoint', filename='checkpoint.pth.tar'):
