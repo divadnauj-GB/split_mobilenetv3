@@ -276,6 +276,7 @@ class SplitMobileNetV3(nn.Module):
     def __init__(self, pretrained=False, split_position=-1, bottleneck_channels=-1, **kwargs) -> None:
         super(SplitMobileNetV3,self).__init__()
         model = mobilenetv3_large(**kwargs)
+        layers = []
         if pretrained:
             state_dict = torch.load('mobilenetv3/pretrained/mobilenetv3-large-1cd25616.pth')
             state_dict.pop("classifier.3.weight")
@@ -286,14 +287,18 @@ class SplitMobileNetV3(nn.Module):
         
         if split_position>0:
             # Catch the first layers 
-            head=nn.Sequential(*list(model.features.children())[:split_position])
+            head=list(model.features.children())[:split_position]
+            #layers.append(head)
             # insert the bottleneck layers
             self.channels=[]
             self.check_channels(list(model.features.children())[split_position])
-            bottleneck=Bottleneck(self.channels[0], bottleneck_channels)
+            bottleneck=[Bottleneck(self.channels[0], bottleneck_channels)]
+            #layers.append(bottleneck)
             # Capture the subsequent layers
-            tail=nn.Sequential(*list(model.features.children())[split_position:-1])        
-            layers=[head,bottleneck,tail]
+            tail=list(model.features.children())[split_position:-1]        
+            layers=head+bottleneck+tail
+            #layers.append(tail)
+            print(layers)
             # create the features model
             self.features=nn.Sequential(*list(layers))
         else:
